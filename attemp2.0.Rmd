@@ -1,0 +1,79 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+*Cmd+Shift+Enter*.
+
+#### Load library
+```{r include=FALSE}
+library("tidyverse")
+library("Gviz")
+library("GenomicRanges")
+```
+#### Import data
+Convert to suitable format
+```{r}
+tdt <- as_tibble(read.csv("../TDT/asd.290.IBD_cleaned.tdt", sep=""))
+source("sub_chr_ensembl.function.R") # load function
+as_tibble(tdt) %>%
+  arrange(P) %>%
+  mutate(CHR=sub_chr_ensembl(CHR))%>%
+  mutate(LOG=-log10(P)) %>%
+  mutate_at("CHR", ~gsub("^","chr",.)) -> tdt
+head(tdt)
+```
+#### select significant snp and visual region
+select 1st 4 snp because of bonferroni correction q-value <0.05
+```{r}
+i=1 # select 1st snp
+tdt.sel <- tdt %>% dplyr:::slice(i)
+sel.chr <- tdt.sel$CHR
+sel.pos <- tdt.sel$BP
+range <- 5e5
+gen <- "hg38"
+```
+#### Plot chromosome ideogram and genome axis track
+```{r echo=TRUE}
+gtrack <- GenomeAxisTrack()
+itrack <- IdeogramTrack(genome=gen, chromosome= sel.chr)
+plotTracks(trackList=list(itrack, gtrack),
+           from=sel.pos-range, to=sel.pos+range)
+```
+#### Plot adjacent variants Pvalue
+```{r echo=TRUE}
+tdt %>%
+  filter(CHR==sel.chr, between(BP, sel.pos-range, sel.pos+range)) %>%
+  dplyr::select(c(1,3,11)) -> tdt.sel.region
+# convert to suitable format for gviz
+grange.tdt <- makeGRangesFromDataFrame(tdt.sel.region, keep.extra.columns=TRUE,
+                                      ignore.strand=TRUE,
+                                      seqnames.field="CHR",
+                                      start.field="BP",
+                                      end.field="BP")
+dtrack <- DataTrack(grange.tdt, name="-log10(P)", genome=gen,
+                    baseline=-log10(0.05/nrow(tdt)),
+                    col.baseline="blue",lty.baseline="dashed")
+plotTracks(trackList=list(itrack, gtrack, dtrack),
+           from=sel.pos-range, to=sel.pos+range)
+```
+#### plot annotation tracks of variants
+```{r}
+tdt %>%
+  filter(CHR==sel.chr, between(BP, sel.pos-range, sel.pos+range)) %>%
+  dplyr::select(c(1,2,3)) -> sel.variant
+sel.variant[-1,2] <- " "
+sel.variant %>%
+  dplyr::rename(chromosome=1, symbol=2, start=3) %>%
+  mutate(end=start, transcript= "TBD") -> sel.variant
+atrack <- GeneRegionTrack(sel.variant, genome=gen, chromosome=sel.chr,
+                          collapse=TRUE, transcriptAnnotation="symbol",
+                          name="Variants")
+plotTracks(trackList=list(itrack, gtrack, atrack, dtrack),
+           from=sel.pos-range, to=sel.pos+range)
+```
+#### plot gene region track
+```{r}
+
+```
+
+*Cmd Option I* /// *Cmd Shift K*

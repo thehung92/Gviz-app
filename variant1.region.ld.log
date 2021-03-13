@@ -1,0 +1,28 @@
+PLINK v1.90b6.12 64-bit (28 Oct 2019)
+Options in effect:
+  --bfile /Users/hung/Data/Autism_vinmec_coop/run_2/asd.hg38_plink_2
+  --ld-snp-list variant1.region.txt
+  --ld-window-r2 0
+  --out variant1.region.ld
+  --r2
+
+Hostname: Hung92-iMac.local
+Working directory: /Users/hung/Data/Autism_vinmec_coop/run_2/Gviz_annotate_2
+Start time: Fri Nov 20 17:02:26 2020
+
+Random number seed: 1605866546
+32768 MB RAM detected; reserving 16384 MB for main workspace.
+452230 variants loaded from .bim file.
+302 people (0 males, 0 females, 302 ambiguous) loaded from .fam.
+Ambiguous sex IDs written to variant1.region.ld.nosex .
+Using up to 15 threads (change this with --threads).
+Before main variant filters, 302 founders and 0 nonfounders present.
+Calculating allele frequencies... done.
+Warning: Nonmissing nonmale Y chromosome genotype(s) present; many commands
+treat these as missing.
+Total genotyping rate is 0.612845.
+452230 variants and 302 people pass filters and QC.
+Note: No phenotypes present.
+--r2 to variant1.region.ld.ld ... done.
+
+End time: Fri Nov 20 17:02:27 2020

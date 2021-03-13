@@ -1,0 +1,209 @@
+```{r}
+rm(list=ls())
+```
+
+
+Load all library
+
+```{r}
+library(dplyr)
+library(Gviz)
+library(stringr)
+library(tidyverse)
+library(biomaRt)
+library(qqman)
+library(metafolio)
+library(patchwork)
+library(forcats)
+```
+
+Read Data
+
+```{r}
+tdt <- as_tibble(read.csv("../TDT/asd.290.IBD_cleaned.tdt", sep=""))
+mtdt <- read.csv("../TDT/asd.290.IBD_cleaned.tdt.adjusted", sep="")
+```
+
+Snp of Interest
+
+```{r}
+i=1 # select 1st snp
+tdt.sel <- tdt %>% dplyr:::slice(str_which(SNP, pattern=mtdt$SNP[i]))
+sel.chr <- tdt.sel$CHR
+sel.pos <- tdt.sel$BP
+range <- 5e5
+```
+
+Plot chromosome ideogram
+```{r}
+##change 23 to X, 24 to Y, 25 to MT
+source("sub_chr_ensembl.function.R")
+sel.chr.adjusted <- sub_chr_ensembl(sel.chr)
+
+##ideogram
+gen <- "hg38"
+itrack <- IdeogramTrack(genome = gen, chromosome = sel.chr.adjusted)
+```
+
+SNP within 1Mp window
+
+```{r}
+tdt %>%
+  filter(CHR==sel.chr, between(BP, sel.pos-range, sel.pos+range)) -> tdt.sel.region
+mutated_tdt <- mutate(tdt.sel.region, strand="*")
+```
+
+Attempt to plot all SNP
+
+```{r}
+##mutating_data_frame into correct chr symbol as in UCSC
+mutated_tdt$CHR <- sub_chr_ensembl(mutated_tdt$CHR) 
+tdt.sel$CHR <- sub_chr_ensembl(tdt.sel$CHR)
+
+## Create SNP point track
+snp_point <- AnnotationTrack(start=tdt.sel$BP,end=tdt.sel$BP,chromosome = tdt.sel$CHR,
+                             strand="*",genome = gen,name="SNP",
+                             group =rep(tdt.sel$SNP),col="red")
+
+##Create axis track
+gtrack <- GenomeAxisTrack()
+
+## mutate data frame
+grange_tdt.sel.region = makeGRangesFromDataFrame(mutated_tdt,  seqnames.field= "CHR",
+                         start.field="BP",
+                         end.field="BP",
+                         strand.field="strand",
+                         starts.in.df.are.0based=FALSE)
+grange_tdt.sel.region
+
+snp_point <- AnnotationTrack(start=tdt.sel$BP, end=tdt.sel$BP,chromosome = tdt.sel$CHR, strand="*",genome = "hg19",name="SNP", group = rep(tdt.sel$SNP),col="red")
+
+
+plotTracks(list(itrack,gtrack, snp_point),from=sel.pos-range,to=sel.pos+range,groupAnnotation = "group",fontcolor.group = "red")
+```
+
+
+Extract lists of genes accroding to SNP position
+
+```{r}
+gene.ensembl <- useMart(biomart="ENSEMBL_MART_ENSEMBL", dataset="hsapiens_gene_ensembl")
+y <- listAttributes(gene.ensembl)
+View(y)
+```
+
+```{r}
+##replace 23 with X, 24 with Y, and 25 w/ MT (mitochondria)
+
+##
+out.bm.genes.region <- getBM(
+  attributes = c('chromosome_name','start_position','end_position','transcript_length',
+                 'strand','gene_biotype',
+                 'ensembl_gene_id','ensembl_exon_id','ensembl_transcript_id',
+                 'external_gene_name','exon_chrom_start'), 
+  filters = c('chromosome_name','start','end'), 
+  values = list(sel.chr.adjusted,sel.pos - range, sel.pos + range), 
+  mart = gene.ensembl)
+
+out.bm.genes.region <- out.bm.genes.region %>% 
+  dplyr::rename(
+    rstarts = exon_chrom_start,
+    chromosome = chromosome_name,
+    start = start_position,
+    end = end_position,
+    width = transcript_length,
+    gene = ensembl_gene_id,
+    feature = gene_biotype,
+    exon = ensembl_exon_id,
+    transcript = ensembl_transcript_id,
+    symbol = external_gene_name
+    )
+out.bm.genes.region$strand[as.character(out.bm.genes.region$strand)=="-1"] <- "-"
+out.bm.genes.region$strand[as.character(out.bm.genes.region$strand)=="1"] <- "+"
+
+unique_genes <- out.bm.genes.region %>% group_by(gene) %>% filter(row_number()==1)
+
+grtrack <- GeneRegionTrack(unique_genes, genome=gen,chromosome=unique_genes$chromosome)
+plotTracks(grtrack)
+
+
+plotTracks(list(itrack,gtrack,snp_point,grtrack),
+           from=sel.pos-range,to=sel.pos+range,
+           groupAnnotation = "group",transcriptAnnotation = "symbol",
+           collapseTranscripts = "longest",
+           extend.left = 0.2,extend.right=0.1)
+
+
+view(unique_genes)
+sample_track <- GeneRegionTrack(unique_genes, genome="hg19",chromosome=unique_genes$chromosome)
+
+```
+
+**Need to fix the gene models**
+
+Below are just attempt to fix gene models.
+
+```{r}
+View(mutated_tdt)
+snp_table <- mutate(mutated_tdt,"end"=mutated_tdt$BP)
+snp_table_2 <- mutate(snp_table,"P1"=-log10(P))
+snp_map <- snp_table_2 %>% 
+  dplyr::rename(
+    start = BP,
+    chromosome = CHR,
+    data = P1
+    )
+snp_map_2 <- snp_map[c("chromosome","start","end","data","strand")]
+dTrack <- DataTrack(snp_map_2, genome = "hg19", name = "-log10(P-value)",
+                    baseline=-log10(0.05/nrow(tdt)),
+                    col.baseline="blue",lty.baseline="dashed")
+
+
+#This is the plot that I sent you
+plotTracks(list(itrack,gtrack,grtrack,snp_point,dTrack),
+           from=sel.pos-range,to=sel.pos+range,
+           groupAnnotation = "group",
+           transcriptAnnotation ="symbol",
+           collapseTranscripts = "longest",
+           extend.left = 0.2,extend.right=0.1,
+           shape="arrow", type="p")
+```
+
+
+
+```{r}
+##Try grouping genes
+
+##copy of unique_genese table
+library(data.table)
+trial <- copy(unique_genes)
+view(trial)
+
+trial$feature[as.character(trial$feature)=="protein_coding"] <- "red"
+trial$feature[as.character(trial$feature)=="processed_pseudogene"] <- "blue"
+trial$feature[as.character(trial$feature)=="lncRNA"] <- "yellow"
+trial$feature[as.character(trial$feature)=="misc_RNA"] <- "purple"
+trial$feature[as.character(trial$feature)=="unprocessed_pseudogene"] <- "green"
+trial$feature
+color_genes <- feature(sample_track)
+color_genes
+
+####################
+sample_track <- GeneRegionTrack(trial, genome="hg19",chromosome=trial$chromosome, fill=trial$feature,group =unique_genes$feature)
+unique_genes$feature
+plotTracks(sample_track, shape="arrow",groupAnnotation="group",
+           protein_coding="darkred",
+           showId=TRUE, fontcolor.group="darkblue",just.group="right")
+
+#####################
+sample_track <- BiomartGeneRegionTrack(trial, genome="hg19",chromosome=trial$chromosome)
+unique_genes$feature
+plotTracks(sample_track, shape="arrow",groupAnnotation="group")
+
+plotTracks(list(itrack,gtrack, snp_point,sample_track),from=sel.pos-range,to=sel.pos+range,groupAnnotation = "group",transcriptAnnotation = "symbol",collapseTranscripts = "longest",extend.left = 0.2,extend.right=0.1,shape="arrow")
+
+##everything in 1 file
+plotTracks(list(itrack,gtrack, sample_track,snp_point,dTrack),from=sel.pos-range,to=sel.pos+range,groupAnnotation = "group",transcriptAnnotation = "symbol",collapseTranscripts = "longest",extend.left = 0.2,extend.right=0.1,shape="arrow", type="b")
+plotTracks(dTrack,type="b")
+```
+
+Cmd Option I /// Cmd Shift K

@@ -1,0 +1,213 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+*Cmd+Shift+Enter*.
+
+#### Load library
+```{r include=FALSE}
+library("tidyverse")
+library("Gviz")
+library("GenomicRanges")
+library(biomaRt)
+```
+#### Import data
+Convert to suitable format
+```{r}
+tdt <- as_tibble(read.csv("../TDT/asd.290.IBD_cleaned.tdt", sep=""))
+source("sub_chr_ensembl.function.R") # load function
+as_tibble(tdt) %>%
+  arrange(P) %>%
+  mutate(CHR=sub_chr_ensembl(CHR))%>%
+  mutate(LOG=-log10(P)) %>%
+  mutate_at("CHR", ~gsub("^","chr",.)) -> tdt
+head(tdt)
+```
+#### select significant snp and visual region
+select 1st 4 snp because of bonferroni correction q-value <0.05
+```{r}
+i=1 # select 1st snp
+tdt.sel <- tdt %>% dplyr:::slice(i)
+sel.chr <- tdt.sel$CHR
+sel.pos <- tdt.sel$BP
+range <- 5e5
+gen <- "hg38"
+```
+#### Plot chromosome ideogram and genome axis track
+```{r echo=TRUE}
+gtrack <- GenomeAxisTrack(labelPos="below")
+itrack <- IdeogramTrack(genome=gen, chromosome= sel.chr)
+displayPars(itrack) <- list(fontfamily="Arial Unicode MS")
+# use cairo pdf to display unicode character
+#cairo_pdf(filename = "test_cairo.pdf")
+plotTracks(trackList=list(itrack, gtrack),
+           from=sel.pos-range, to=sel.pos+range)
+#dev.off()
+```
+#### Plot adjacent variants Pvalue
+```{r echo=TRUE}
+tdt %>%
+  filter(CHR==sel.chr, between(BP, sel.pos-range, sel.pos+range)) %>%
+  dplyr::select(c(1,3,11)) -> tdt.sel.region
+# convert to suitable format for gviz
+grange.tdt <- makeGRangesFromDataFrame(tdt.sel.region, keep.extra.columns=TRUE,
+                                      ignore.strand=TRUE,
+                                      seqnames.field="CHR",
+                                      start.field="BP",
+                                      end.field="BP")
+dtrack <- DataTrack(grange.tdt, name="-log10(P)", genome=gen,
+                    baseline=-log10(0.05/nrow(tdt)),
+                    col.baseline="blue",lty.baseline="dashed")
+displayPars(dtrack) <- list(ylim=c(0,9))
+plotTracks(trackList=list(itrack, gtrack, dtrack),
+           from=sel.pos-range, to=sel.pos+range)
+```
+#### plot annotation tracks of variants
+```{r}
+tdt %>%
+  filter(CHR==sel.chr, between(BP, sel.pos-range, sel.pos+range)) %>%
+  dplyr::select(c(1,2,3)) -> sel.variant
+sel.variant[-1,2] <- " "
+sel.variant %>%
+  dplyr::rename(chromosome=1, id=2, start=3) %>%
+  mutate(end=start,group=c("sel",rep("adj",nrow(sel.variant)-1))) -> sel.variant
+# atrack <- GeneRegionTrack(sel.variant, genome=gen, chromosome=sel.chr,
+#                           stacking="dense", transcriptAnnotation="symbol",
+#                           name="Variants")
+# The following example takes the standard blue and makes it transparent (~50%)
+col0 <- rgb(0, 0, 255, max = 255, alpha = 100, names = "blue40")
+#
+atrack <- AnnotationTrack(name="Variants", genome=gen, chromosome=sel.chr,
+                          start=sel.variant$start, end=sel.variant$end,
+                          id=sel.variant$id,featureAnnotation="id",
+                          fontcolor.feature="darkblue",
+                          rotation.title=0,showTitle=TRUE,cex.title=0.5,
+                          shape="box",stacking="dense", #below is new code
+                          feature=rep(c("selected","adjacent"),c(1,nrow(sel.variant)-1)),
+                          col="transparent", selected="red", adjacent=col0
+                          )
+plotTracks(trackList=list(itrack, atrack, dtrack, gtrack),
+           from=sel.pos-range, to=sel.pos+range)
+```
+#### plot gene region track with biomart
+```{r echo=TRUE, message=FALSE}
+# hg38; ensembl database.
+gene.ensembl <- useMart(biomart="ENSEMBL_MART_ENSEMBL",
+                        dataset="hsapiens_gene_ensembl")
+# query needed biomart field
+out.bm.genes.region <- getBM(
+  attributes = c('chromosome_name','exon_chrom_start','exon_chrom_end','strand',
+                 'gene_biotype',
+                 'ensembl_gene_id','ensembl_exon_id','ensembl_transcript_id',
+                 'external_gene_name'), 
+  filters = c('chromosome_name','start','end'), 
+  values = list(gsub("chr","",sel.chr),sel.pos - range, sel.pos + range), 
+  mart = gene.ensembl)
+# reformat dataframe for plotting
+out.bm.genes.region %>%
+  dplyr::rename(chromosome=1,
+                start=2,
+                end=3,
+                strand=4,
+                feature=5,
+                gene=6,
+                exon=7,
+                transcript=8,
+                symbol=9) %>%
+  mutate(strand=sub_strand_gviz(strand)) %>%
+  filter(feature=="protein_coding") %>%
+  mutate(symbol=paste0(symbol,strand)) %>%
+  mutate_at("symbol",~gsub("\\+$","\u2192",.)) %>%
+  mutate_at("symbol",~gsub("\\-$","\u2190",.)) -> genes.region
+grtrack <- GeneRegionTrack(genes.region,name="Known Genes\nEnsembl",
+                           genome=gen,chromosome=sel.chr,
+                           transcriptAnnotation="symbol",
+                           collapseTranscripts="longest",
+                           fontfamily.group="Arial Unicode MS",
+                           fontsize.group=12)
+
+plotTracks(trackList=list(itrack, gtrack, atrack, dtrack, grtrack),
+           from=sel.pos-range, to=sel.pos+range)
+```
+#### plot recombination rate track
+```{r}
+recomb.rate <- read.delim("~/Tools/Library/Genetic_map/recomb-hg38/genetic_map_GRCh38_merged.tab")
+recomb.rate %>%
+  filter(chrom==sel.chr, between(pos, sel.pos-range, sel.pos+range)) -> recomb.rate
+recomb.rate %>%
+  arrange(pos) %>%
+  mutate(pos_end=c(pos[-1],pos[469])) %>%
+  select(1,2,5,3) -> recomb.df
+grange.recomb <- makeGRangesFromDataFrame(recomb.df, keep.extra.columns=TRUE,
+                                      ignore.strand=TRUE,
+                                      seqnames.field="chrom",
+                                      start.field="pos",
+                                      end.field="pos_end")
+rrtrack <- DataTrack(grange.recomb, name="Recomb.\nrate\n(cM/Mbp)", genome=gen,
+                     type="l")
+plotTracks(trackList=list(itrack, gtrack, atrack, grtrack,dtrack,rrtrack),
+           from=sel.pos-range, to=sel.pos+range)
+```
+#### Highlight track
+```{r echo=TRUE}
+ht <- HighlightTrack(trackList=list(grtrack,atrack,dtrack,rrtrack,gtrack),
+                     start=sel.pos-2000, width=4000,
+                     chromosome=sel.chr)
+#pdf(file=paste0("variant_",i,".",sel.chr,"_",sel.pos,".pdf"),
+#    width=8, height=4)
+plotTracks(list(itrack, ht), sizes=c(1,3,1,5,3,2),
+           from=sel.pos-range, to=sel.pos+range)
+#dev.off()
+```
+#### output pdf
+```{r include=FALSE}
+png(file=paste0("variant_",i,".",sel.chr,"_",sel.pos,".png"),
+    bg="white",units="in",width=8, height=4,res=300)
+plotTracks(list(itrack, ht), sizes=c(1,1,3,5,3,2),
+           from=sel.pos-range, to=sel.pos+range)
+dev.off()
+```
+
+#### calculate LD r2 with plink
+```{r}
+# write list of variant file
+for (i in 1:4) {
+tdt.sel <- tdt %>% dplyr:::slice(i)
+sel.chr <- tdt.sel$CHR
+sel.pos <- tdt.sel$BP
+range <- 5e5
+tdt %>%
+  filter(CHR==sel.chr, between(BP, sel.pos-range, sel.pos+range)) -> temp
+temp %>%
+  dplyr::select(2) %>%
+  write_delim(x=., file=paste0("variant",i,".region.txt"), delim="\t", col_names=FALSE)
+}
+```
+```{bash}
+INPUT0="/Users/hung/Data/Autism_vinmec_coop/run_2/asd.hg38_plink_2"
+INPUT1="variant1.region.txt"
+OUTPUT=$(echo $INPUT1 | sed 's/.txt/.ld/')
+# echo ${OUTPUT}
+#plink --bfile ${INPUT0} --ld-snp-list ${INPUT1} \
+#  --r2 --ld-window-r2 0 \
+#  --out ${OUTPUT}
+
+plink --bfile ${INPUT0} --ld-snp-list ${INPUT1} \
+  --r2 --ld-window-r2 0 \
+  --out ${OUTPUT}
+```
+```{r}
+ld.variant1 <- read.csv("~/Data/Autism_vinmec_coop/run_2/Gviz_annotate_2/variant1.region.ld.ld", sep="") %>% as_tibble()
+ld.variant1 %>%
+  filter(SNP_B %in% temp$SNP[1] | SNP_A %in% temp$SNP[1])
+# select
+```
+
+
+#### plot
+```{r}
+
+```
+
+
+*Cmd Option I* /// *Cmd Shift K*
